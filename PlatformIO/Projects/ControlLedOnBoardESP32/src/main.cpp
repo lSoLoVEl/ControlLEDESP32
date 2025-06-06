@@ -38,83 +38,7 @@ void WiFiEvent(WiFiEvent_t event)
 }
 
 // HTML content
-const char *htmlContent = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <title>ESP32 LED Control</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            margin: 20px;
-        }
-        .button {
-            border: none;
-            color: white;
-            padding: 15px 32px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 2px;
-            cursor: pointer;
-            border-radius: 4px;
-            width: 200px;
-        }
-        .button-red {
-            background-color: #f44336;
-        }
-        .button-green {
-            background-color: #4CAF50;
-        }
-        .button-auto {
-            background-color: #2196F3;
-        }
-        .button-save {
-            background-color: #FF9800;
-        }
-        .input-group {
-            margin: 20px 0;
-        }
-        input[type="number"] {
-            padding: 10px;
-            font-size: 16px;
-            width: 100px;
-            text-align: center;
-            margin: 0 10px;
-        }
-        label {
-            font-size: 16px;
-        }
-    </style>
-</head>
-<body>
-    <h1>ESP32 LED Control</h1>
-    <p>
-        <a href="/off"><button class="button button-green">ON</button></a>
-    </p>
-    <p>
-        <a href="/on"><button class="button button-red">OFF</button></a>
-    </p>
-    <div class="input-group">
-        <label for="interval">Blink Interval (ms):</label>
-        <input type="number" id="interval" name="interval" value="1000" min="100" max="10000" step="100">
-        <a href="#" onclick="saveInterval()"><button class="button button-save">Save Interval</button></a>
-    </div>
-    <p>
-        <a href="/auto"><button class="button button-auto">AUTO</button></a>
-    </p>
-    <script>
-        function saveInterval() {
-            var interval = document.getElementById('interval').value;
-            window.location.href = '/saveInterval?interval=' + interval;
-        }
-    </script>
-</body>
-</html>
-)rawliteral";
+const char htmlContent[] = "<!DOCTYPE html><html><head><title>ESP32 LED Control</title><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>body{font-family:Arial,sans-serif;text-align:center;margin:20px}.button{border:none;color:white;padding:15px 32px;text-align:center;text-decoration:none;display:inline-block;font-size:16px;margin:4px 2px;cursor:pointer;border-radius:4px;width:200px}.button-red{background-color:#f44336}.button-green{background-color:#4CAF50}.button-auto{background-color:#2196F3}.button-save{background-color:#FF9800}.button-disabled{background-color:#cccccc;cursor:not-allowed}.input-group{margin:20px 0}input[type=\"number\"]{padding:10px;font-size:16px;width:100px;text-align:center;margin:0 10px}label{font-size:16px}.status-indicator{width:20px;height:20px;border-radius:50%;display:inline-block;margin-left:10px;vertical-align:middle}.status-on{background-color:#808080}.status-off{background-color:#4CAF50}.status-auto{background-color:#FFD700}</style></head><body><h1>ESP32 LED Control</h1><div style=\"margin:20px 0\"><h2>LED Status: <span id=\"ledStatus\">OFF</span><span id=\"statusIndicator\" class=\"status-indicator status-off\"></span></h2></div><p><a href=\"/off\"><button class=\"button button-green\">ON</button></a></p><p><a href=\"/on\"><button class=\"button button-red\">OFF</button></a></p><div class=\"input-group\"><label for=\"interval\">Blink Interval (ms):</label><input type=\"number\" id=\"interval\" name=\"interval\" min=\"100\" max=\"10000\" step=\"100\" oninput=\"checkInput()\"><button id=\"saveButton\" onclick=\"saveInterval()\" class=\"button button-save button-disabled\" disabled>Save Interval</button></div><p><a href=\"/auto\"><button class=\"button button-auto\">AUTO</button></a></p><script>function checkInput(){var input=document.getElementById('interval');var saveButton=document.getElementById('saveButton');if(input.value===''){saveButton.disabled=true;saveButton.classList.add('button-disabled');}else{saveButton.disabled=false;saveButton.classList.remove('button-disabled');}}function saveInterval(){var interval=document.getElementById('interval').value;window.location.href='/saveInterval?interval='+interval;}function updateStatus(){fetch('/status').then(response=>response.json()).then(data=>{var displayStatus = data.status === 'ON' ? 'OFF' : data.status === 'OFF' ? 'ON' : data.status;document.getElementById('ledStatus').textContent=displayStatus;document.getElementById('statusIndicator').className='status-indicator status-'+data.status.toLowerCase();});}setInterval(updateStatus,1000);updateStatus();</script></body></html>";
 
 void setup()
 {
@@ -154,6 +78,17 @@ void setup()
     server.on("/", HTTP_GET, []()
               { server.send(200, "text/html", htmlContent); });
 
+    server.on("/status", HTTP_GET, []()
+              {
+        String status;
+        if (autoMode) {
+            status = "AUTO (" + String(interval) + "ms)";
+        } else {
+            status = digitalRead(ledPin) ? "ON" : "OFF";
+        }
+        String jsonResponse = "{\"status\":\"" + status + "\"}";
+        server.send(200, "application/json", jsonResponse); });
+
     server.on("/on", HTTP_GET, []()
               {
         autoMode = false;
@@ -185,16 +120,19 @@ void setup()
     server.on("/auto", HTTP_GET, []()
               {
               if (server.hasArg("interval")) {
-            interval = server.arg("interval").toInt();
-            // Ensure interval is within valid range (100ms to 10s)
-            if (interval < 100) interval = 100;
-            if (interval > 10000) interval = 10000;
-            Serial.println("Saved interval: " + String(interval));
-        }
+                  interval = server.arg("interval").toInt();
+                  // Ensure interval is within valid range (100ms to 10s)
+                  if (interval < 100) interval = 100;
+                  if (interval > 10000) interval = 10000;
+                  Serial.println("Saved interval: " + String(interval));
+              } else {
+                  interval = 1000; // Default to 1000ms if no interval specified
+                  Serial.println("Using default interval: " + String(interval));
+              }
 
-        autoMode = true;
-        server.sendHeader("Location", "/");
-        server.send(303); });
+              autoMode = true;
+              server.sendHeader("Location", "/");
+              server.send(303); });
 
     // Start server
     server.begin();
