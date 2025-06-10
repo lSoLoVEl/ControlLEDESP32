@@ -10,7 +10,7 @@ const char* ap_ssid = "ESP32-yabai";  // ชื่อ WiFi ที่จะปล
 const char* ap_password = "12345678";      // รหัสผ่าน WiFi (ต้องมีอย่างน้อย 8 ตัวอักษร)
 
 // ESP-2 IP Address (จะใช้ IP แบบ Static)
-const char* esp2_ip = "192.168.4.1";  // IP ของ ESP-2 ในเครือข่าย AP
+const char* esp2_ip = "192.168.4.2";  // IP ของ ESP-2 ในเครือข่าย AP
 
 // LED pin definition
 const int LED_PIN = 5;  // Using GPIO2 for LED
@@ -39,6 +39,173 @@ bool lastESP2Online = false;
 // Create WebServer object on port 80
 WebServer server(80);
 
+// HTML content for the web interface
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 LED Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial; text-align: center; margin: 20px; }
+        .button { padding: 10px 20px; margin: 5px; font-size: 16px; }
+        .status-box { 
+            border: 1px solid #ccc; 
+            padding: 10px; 
+            margin: 10px; 
+            border-radius: 5px;
+            display: inline-block;
+            min-width: 200px;
+        }
+        .led-status {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-left: 10px;
+        }
+        .led-on { background-color: #00ff00; }
+        .led-off { background-color: #ff0000; }
+        .connection-status {
+            font-size: 14px;
+            margin-top: 5px;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        .online { 
+            color: #ffffff; 
+            background-color: #00aa00;
+        }
+        .offline { 
+            color: #ffffff; 
+            background-color: #aa0000;
+        }
+        .status-details {
+            margin: 10px 0;
+            padding: 5px;
+            background-color: #f5f5f5;
+            border-radius: 3px;
+        }
+        .status-label {
+            font-weight: bold;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>ESP32 LED Control</h1>
+    
+    <div class="status-box">
+        <h2>ESP-1</h2>
+        <div class="status-details">
+            <span class="status-label">Mode:</span>
+            <span id="esp1-mode">OFF</span>
+            <span id="esp1-led" class="led-status led-off"></span>
+        </div>
+        <div class="status-details">
+            <span class="status-label">Connection:</span>
+            <span id="esp1-connection" class="connection-status online">Online</span>
+        </div>
+        <div class="status-details">
+            <span class="status-label">Last Update:</span>
+            <span id="esp1-last-update">Never</span>
+        </div>
+        <div>
+            <button class="button" onclick="controlLED(1, 'on')">ON</button>
+            <button class="button" onclick="controlLED(1, 'off')">OFF</button>
+            <button class="button" onclick="controlLED(1, 'auto')">AUTO</button>
+        </div>
+    </div>
+
+    <div class="status-box">
+        <h2>ESP-2</h2>
+        <div class="status-details">
+            <span class="status-label">Mode:</span>
+            <span id="esp2-mode">OFF</span>
+            <span id="esp2-led" class="led-status led-off"></span>
+        </div>
+        <div class="status-details">
+            <span class="status-label">Connection:</span>
+            <span id="esp2-connection" class="connection-status offline">Offline</span>
+        </div>
+        <div class="status-details">
+            <span class="status-label">Last Update:</span>
+            <span id="esp2-last-update">Never</span>
+        </div>
+        <div>
+            <button class="button" onclick="controlLED(2, 'on')">ON</button>
+            <button class="button" onclick="controlLED(2, 'off')">OFF</button>
+            <button class="button" onclick="controlLED(2, 'auto')">AUTO</button>
+        </div>
+    </div>
+
+    <div>
+        <h3>Interval (ms)</h3>
+        <input type="number" id="interval" value="1000" min="100">
+        <button class="button" onclick="setInterval()">Set Interval</button>
+    </div>
+
+    <script>
+        function formatTime() {
+            const now = new Date();
+            return now.toLocaleTimeString();
+        }
+
+        function updateStatus() {
+            // Update ESP-1 status
+            fetch('/status/1')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('esp1-mode').textContent = data.mode;
+                    const ledElement = document.getElementById('esp1-led');
+                    ledElement.className = 'led-status ' + (data.actualState ? 'led-on' : 'led-off');
+                    document.getElementById('esp1-last-update').textContent = formatTime();
+                });
+
+            // Update ESP-2 status
+            fetch('/status/2')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('esp2-mode').textContent = data.mode;
+                    const ledElement = document.getElementById('esp2-led');
+                    ledElement.className = 'led-status ' + (data.actualState ? 'led-on' : 'led-off');
+                    
+                    const connectionElement = document.getElementById('esp2-connection');
+                    connectionElement.textContent = data.online ? 'Online' : 'Offline';
+                    connectionElement.className = 'connection-status ' + (data.online ? 'online' : 'offline');
+                    
+                    document.getElementById('esp2-last-update').textContent = formatTime();
+                });
+        }
+
+        function controlLED(esp, mode) {
+            fetch('/led/' + mode + '/' + esp)
+                .then(response => response.json())
+                .then(data => {
+                    console.log(data);
+                    updateStatus(); // Update status immediately after control
+                });
+        }
+
+        function setInterval() {
+            const value = document.getElementById('interval').value;
+            Promise.all([
+                fetch('/interval/1?value=' + value),
+                fetch('/interval/2?value=' + value)
+            ]).then(() => {
+                console.log('Interval updated');
+            });
+        }
+
+        // Update status every 2 seconds
+        setInterval(updateStatus, 2000);
+        // Initial status update
+        updateStatus();
+    </script>
+</body>
+</html>
+)rawliteral";
+
 // Function to control ESP-2
 void controlESP2(String command) {
   HTTPClient http;
@@ -57,7 +224,7 @@ void controlESP2(String command) {
 // Function to set interval on ESP-2
 void setESP2Interval(long newInterval) {
   HTTPClient http;
-  String url = "http://" + String(esp2_ip) + "/interval/" + String(newInterval);
+  String url = "http://" + String(esp2_ip) + "/interval?value=" + String(newInterval);
   http.begin(url);
   int httpCode = http.GET();
   if (httpCode > 0) {
@@ -68,233 +235,6 @@ void setESP2Interval(long newInterval) {
   }
   http.end();
 }
-
-// HTML content
-const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE HTML>
-<html>
-<head>
-  <title>ESP-1 Control Panel</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin: 0px auto;
-      padding: 20px;
-    }
-    .container {
-      display: flex;
-      justify-content: space-around;
-      flex-wrap: wrap;
-    }
-    .device {
-      margin: 20px;
-      padding: 20px;
-      border: 1px solid #ccc;
-      border-radius: 8px;
-      width: 300px;
-    }
-    .button {
-      background-color: #4CAF50;
-      border: none;
-      color: white;
-      padding: 15px 32px;
-      text-align: center;
-      text-decoration: none;
-      display: inline-block;
-      font-size: 16px;
-      margin: 4px 2px;
-      cursor: pointer;
-      border-radius: 4px;
-    }
-    .button-off {
-      background-color: #f44336;
-    }
-    .button-auto {
-      background-color: #2196F3;
-    }
-    .slider {
-      width: 300px;
-      margin: 20px;
-    }
-    .status {
-      margin: 20px;
-      padding: 10px;
-      border-radius: 4px;
-      background-color: #f0f0f0;
-    }
-    .wifi-info {
-      background-color: #e3f2fd;
-      padding: 10px;
-      border-radius: 4px;
-      margin: 20px 0;
-    }
-  </style>
-</head>
-<body>
-  <h1>ESP Control Panel</h1>
-  
-  <div class="wifi-info">
-    <h3>WiFi Information</h3>
-    <p>SSID: ESP32-yabai</p>
-    <p>Password: 12345678</p>
-  </div>
-
-  <div class="container">
-    <!-- ESP-1 Control -->
-    <div class="device">
-      <h2>ESP-1 Control</h2>
-      <div class="status">
-        <p>Board Status: <span id="boardStatus1" style="font-weight: bold;">ONLINE</span></p>
-        <p>Current Mode: <span id="mode1">OFF</span></p>
-        <p>LED Status: <span id="ledStatus1">OFF</span></p>
-        <p>Interval: <span id="interval1">1000</span>ms</p>
-      </div>
-      <p>
-        <button class="button button-off" onclick="controlLED('off', 1)">OFF</button>
-        <button class="button" onclick="controlLED('on', 1)">ON</button>
-        <button class="button button-auto" onclick="controlLED('auto', 1)">AUTO</button>
-      </p>
-      <p>
-        <label for="interval1">Blink Interval (ms):</label><br>
-        <input type="range" min="100" max="5000" value="1000" class="slider" id="interval1" onchange="updateIntervalValue(this.value, 1)">
-        <input type="number" min="100" max="5000" value="1000" id="intervalInput1" style="width: 80px; margin: 0 10px;">
-        <button class="button" onclick="updateInterval(1)">Confirm</button>
-        <span id="intervalValue1">1000</span>ms
-      </p>
-    </div>
-
-    <!-- ESP-2 Control -->
-    <div class="device">
-      <h2>ESP-2 Control</h2>
-      <div class="status">
-        <p>Board Status: <span id="boardStatus2" style="font-weight: bold;">ONLINE</span></p>
-        <p>Current Mode: <span id="mode2">OFF</span></p>
-        <p>LED Status: <span id="ledStatus2">OFF</span></p>
-        <p>Interval: <span id="interval2">1000</span>ms</p>
-      </div>
-      <p>
-        <button class="button button-off" onclick="controlLED('off', 2)">OFF</button>
-        <button class="button" onclick="controlLED('on', 2)">ON</button>
-        <button class="button button-auto" onclick="controlLED('auto', 2)">AUTO</button>
-      </p>
-      <p>
-        <label for="interval2">Blink Interval (ms):</label><br>
-        <input type="range" min="100" max="5000" value="1000" class="slider" id="interval2" onchange="updateIntervalValue(this.value, 2)">
-        <input type="number" min="100" max="5000" value="1000" id="intervalInput2" style="width: 80px; margin: 0 10px;">
-        <button class="button" onclick="updateInterval(2)">Confirm</button>
-        <span id="intervalValue2">1000</span>ms
-      </p>
-    </div>
-  </div>
-
-  <script>
-    // Function to check board status
-    function checkBoardStatus(device) {
-      fetch('/status/' + device)
-        .then(response => {
-          if (response.ok) {
-            return response.json();
-          }
-          throw new Error('Network response was not ok');
-        })
-        .then(data => {
-          if (device === 2) {
-            // For ESP-2, only update the online status
-            document.getElementById('boardStatus' + device).innerHTML = data.online ? 'ONLINE' : 'OFFLINE';
-            document.getElementById('boardStatus' + device).style.color = data.online ? '#4CAF50' : '#f44336';
-            
-            // Only update other values if we got a successful response
-            if (data.online) {
-              document.getElementById('mode' + device).innerHTML = data.mode;
-              document.getElementById('ledStatus' + device).innerHTML = data.actualState ? 'ON' : 'OFF';
-            }
-          } else {
-            // For ESP-1, update everything as before
-            document.getElementById('boardStatus' + device).innerHTML = 'ONLINE';
-            document.getElementById('boardStatus' + device).style.color = '#4CAF50';
-            document.getElementById('mode' + device).innerHTML = data.mode;
-            document.getElementById('ledStatus' + device).innerHTML = data.actualState ? 'ON' : 'OFF';
-          }
-          
-          // Check if LED state matches the mode
-          const statusDiv = document.querySelector('.device:nth-child(' + device + ') .status');
-          if ((data.mode === 'ON' && !data.actualState) || 
-              (data.mode === 'OFF' && data.actualState)) {
-            statusDiv.style.backgroundColor = '#ffebee';
-            if (!statusDiv.querySelector('.warning')) {
-              statusDiv.innerHTML += '<p class="warning" style="color: red;">Warning: LED may be malfunctioning!</p>';
-            }
-          } else {
-            statusDiv.style.backgroundColor = '#f0f0f0';
-            const warning = statusDiv.querySelector('.warning');
-            if (warning) {
-              warning.remove();
-            }
-          }
-        })
-        .catch(error => {
-          if (device === 1) {  // Only update ESP-1 status on error
-            document.getElementById('boardStatus' + device).innerHTML = 'OFFLINE';
-            document.getElementById('boardStatus' + device).style.color = '#f44336';
-            document.getElementById('mode' + device).innerHTML = 'UNKNOWN';
-            document.getElementById('ledStatus' + device).innerHTML = 'UNKNOWN';
-          }
-        });
-    }
-
-    // Check status for both boards every 5 seconds instead of 2
-    setInterval(() => {
-      checkBoardStatus(1);
-      checkBoardStatus(2);
-    }, 5000);
-
-    // Initial check
-    checkBoardStatus(1);
-    checkBoardStatus(2);
-
-    function controlLED(mode, device) {
-      fetch('/led/' + mode + '/' + device)
-        .then(response => response.json())
-        .then(data => {
-          document.getElementById('mode' + device).innerHTML = data.mode;
-          if (mode === 'auto') {
-            document.getElementById('interval' + device).value = 1000;
-            document.getElementById('intervalInput' + device).value = 1000;
-            document.getElementById('intervalValue' + device).innerHTML = 1000;
-            fetch('/interval/' + device + '?value=1000')
-              .then(response => response.json())
-              .then(data => {
-                document.getElementById('interval' + device).innerHTML = data.interval;
-              });
-          }
-        });
-    }
-
-    function updateIntervalValue(value, device) {
-      document.getElementById('intervalValue' + device).innerHTML = value;
-      document.getElementById('intervalInput' + device).value = value;
-    }
-
-    function updateInterval(device) {
-      const value = document.getElementById('intervalInput' + device).value;
-      if (value >= 100 && value <= 5000) {
-        document.getElementById('interval' + device).value = value;
-        document.getElementById('intervalValue' + device).innerHTML = value;
-        fetch('/interval/' + device + '?value=' + value)
-          .then(response => response.json())
-          .then(data => {
-            document.getElementById('interval' + device).innerHTML = data.interval;
-          });
-      } else {
-        alert('Please enter a value between 100 and 5000');
-      }
-    }
-  </script>
-</body>
-</html>
-)rawliteral";
 
 void setup() {
   // Initialize LED pin as output
@@ -450,12 +390,33 @@ void setup() {
       String payload = server.arg("plain");
       server.send(200, "application/json", "{\"status\":\"received\"}");
       
-      // Simple string parsing instead of JSON
-      if (payload.indexOf("\"mode\":\"OFF\"") != -1) currentModeESP2 = LED_OFF;
-      else if (payload.indexOf("\"mode\":\"ON\"") != -1) currentModeESP2 = LED_ON;
-      else if (payload.indexOf("\"mode\":\"AUTO\"") != -1) currentModeESP2 = LED_AUTO;
+      // Parse JSON response
+      StaticJsonDocument<200> doc;
+      DeserializationError error = deserializeJson(doc, payload);
       
-      Serial.println("Received status from ESP-2: " + payload);
+      if (!error) {
+        // Update last known values
+        String mode = doc["mode"].as<String>();
+        if (mode == "OFF") {
+          lastESP2Mode = "OFF";
+          currentModeESP2 = LED_OFF;
+        }
+        else if (mode == "ON") {
+          lastESP2Mode = "ON";
+          currentModeESP2 = LED_ON;
+        }
+        else if (mode == "AUTO") {
+          lastESP2Mode = "AUTO";
+          currentModeESP2 = LED_AUTO;
+        }
+        
+        lastESP2State = doc["actualState"].as<bool>();
+        lastESP2Online = doc["online"].as<bool>();
+        
+        Serial.println("Received status from ESP-2: " + payload);
+      } else {
+        Serial.println("Failed to parse JSON from ESP-2");
+      }
     } else {
       server.send(400, "application/json", "{\"error\":\"No data received\"}");
     }
@@ -479,4 +440,4 @@ void loop() {
       Serial.println(ledState ? "LED ON (Auto)" : "LED OFF (Auto)");
     }
   }
-}
+} 
