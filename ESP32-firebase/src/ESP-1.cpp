@@ -1,7 +1,11 @@
+#include <Arduino.h>
+#if defined(ESP32) || defined(ARDUINO_RASPBERRY_PI_PICO_W)
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Firebase_ESP_Client.h>
 #include <addons/TokenHelper.h>
+#elif defined(ESP8266)
+#endif
 #include <addons/RTDBHelper.h>
 #include <FB_Const.h>
 // WiFi credentials
@@ -10,13 +14,15 @@ const char* wifi_password = "12345678";
 
 // Firebase credentials
 #define API_KEY "AIzaSyC8LlbCVEfb2TSa6GaEthAqiSFfHt_olkI"
-#define DATABASE_URL "controlesp32-4af2a-default-rtdb.asia-southeast1.firebasedatabase.app"
-
+#define DATABASE_URL "https://controlesp32-4af2a-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define USER_EMAIL "admin@gmail.com"
+#define USER_PASSWORD "12345678"
 // Firebase Data object
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
-
+unsigned long sendDataPrevMillis = 0;
+unsigned long count = 0;
 // ตัวแปรสำหรับเก็บ UID ที่ได้จากการ Authenticate
 String currentUserUid = "";
 
@@ -71,70 +77,21 @@ void setup() {
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 
+   Serial.printf("Firebase Client v%s\n\n", FIREBASE_CLIENT_VERSION);
+
   // Initialize Firebase
   config.api_key = API_KEY;
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
   config.database_url = DATABASE_URL;
   config.token_status_callback = tokenStatusCallback;
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
 
-  Serial.println("Signing in anonymously...");
-  if (Firebase.auth.loginAnonymous(&config, &auth)) {
-    Serial.println("Successfully signed in anonymously.");
-    currentUserUid = auth.token.uid.c_str();
-    Serial.print("Current user UID: ");
-    Serial.println(currentUserUid);
-  } else {
-    Serial.print("Anonymous sign in failed: ");
-    Serial.println(fbdo.errorReason());
-  }
+ 
 
-  // Set up server routes
-  server.on("/", HTTP_GET, []() {
-    server.send(200, "application/json", "{\"status\":\"online\"}");
-  });
 
-  server.on("/led/on", HTTP_GET, []() {
-    currentMode = LED_ON;
-    digitalWrite(LED_PIN, HIGH);
-    server.send(200, "application/json", "{\"status\":\"LED turned ON\"}");
-  });
 
-  server.on("/led/off", HTTP_GET, []() {
-    currentMode = LED_OFF;
-    digitalWrite(LED_PIN, LOW);
-    server.send(200, "application/json", "{\"status\":\"LED turned OFF\"}");
-  });
-
-  server.on("/led/auto", HTTP_GET, []() {
-    currentMode = LED_AUTO;
-    server.send(200, "application/json", "{\"status\":\"LED set to AUTO mode\"}");
-  });
-
-  server.on("/interval", HTTP_GET, []() {
-    if (server.hasArg("value")) {
-      long newInterval = server.arg("value").toInt();
-      if (newInterval > 0) {
-        interval = newInterval;
-        String response;
-        response.concat("{\"interval\":");
-        response.concat(String(newInterval));
-        response.concat("}");
-        server.send(200, "application/json", response);
-      }
-    }
-  });
-
-  server.on("/status", HTTP_GET, []() {
-    String status = getMode();
-    String response;
-    response.concat("{\"mode\":\"");
-    response.concat(status);
-    response.concat("\",\"actualState\":");
-    response.concat(String(digitalRead(LED_PIN)));
-    response.concat("}");
-    server.send(200, "application/json", response);
-  });
 
   server.begin();
   Serial.println("HTTP server started");
@@ -152,42 +109,45 @@ void loop() {
     }
   }
 
-  // Update Firebase every 5 seconds
-  static unsigned long lastFirebaseUpdate = 0;
-  if (millis() - lastFirebaseUpdate >= 5000) {
-    lastFirebaseUpdate = millis();
-    
-    String path;
-    path.concat("/devices/");
-    path.concat(currentUserUid);
-    
-    // Send LED status
-    String ledPath;
-    ledPath.concat(path);
-    ledPath.concat("/led");
-    if (Firebase.RTDB.setString(&fbdo, ledPath, getLedStatus())) {
-      Serial.println("LED status sent to Firebase");
-    } else {
-      String errorMsg;
-      errorMsg.concat("Failed to send LED status\nREASON: ");
-      errorMsg.concat(fbdo.errorReason());
-      Serial.println(errorMsg);
-    }
-    
-    // Send mode
-    String modePath;
-    modePath.concat(path);
-    modePath.concat("/mode");
-    if (Firebase.RTDB.setString(&fbdo, modePath, getMode())) {
-      Serial.println("Mode sent to Firebase");
-    }
-    
-    // Send online status
-    String onlinePath;
-    onlinePath.concat(path);
-    onlinePath.concat("/onlineStatus");
-    if (Firebase.RTDB.setBool(&fbdo, onlinePath, true)) {
-      Serial.println("Online status sent to Firebase");
-    }
+  // Firebase operations - combined update every 5 seconds
+  if (Firebase.ready() && (millis() - sendDataPrevMillis > 5000 || sendDataPrevMillis == 0)) {
+    sendDataPrevMillis = millis();
+
+    // Create JSON object for device data
+    FirebaseJson json;
+    json.setDoubleDigits(3);
+    json.add("ledStatus", getLedStatus());
+    json.add("mode", getMode());
+    json.add("count", count);
+    json.add("onlineStatus", true);
+
+    // Set main device data
+    String path = "/devices/";
+    path += currentUserUid;
+    Serial.printf("Set device data... %s\n", Firebase.RTDB.setJSON(&fbdo, path, &json) ? "ok" : fbdo.errorReason().c_str());
+
+    // Create and set history array
+    FirebaseJsonArray arr;
+    arr.setFloatDigits(2);
+    arr.setDoubleDigits(4);
+    arr.add(getLedStatus(), getMode(), count);
+
+    String arrayPath = path;
+    arrayPath += "/history";
+    Serial.printf("Set history array... %s\n", Firebase.RTDB.setArray(&fbdo, arrayPath, &arr) ? "ok" : fbdo.errorReason().c_str());
+
+    // Push to logs
+    String pushPath = path;
+    pushPath += "/logs";
+    Serial.printf("Push to logs... %s\n", Firebase.RTDB.pushJSON(&fbdo, pushPath, &json) ? "ok" : fbdo.errorReason().c_str());
+
+    // Update the pushed data with incremented counter
+    json.set("count", count + 0.29745);
+    String updatePath = pushPath;
+    updatePath += "/";
+    updatePath += fbdo.pushName();
+    Serial.printf("Update log entry... %s\n\n", Firebase.RTDB.updateNode(&fbdo, updatePath, &json) ? "ok" : fbdo.errorReason().c_str());
+
+    count++;
   }
 } 
